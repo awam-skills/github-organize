@@ -3,9 +3,12 @@
 """按 Excel「人工处理」列执行可自动化操作，并写回处理结果。
 
 人工处理取值：
-  - 不处理（默认）→ 跳过
-  - 按照建议 → 按「处理分类」映射可自动动作并执行
+  - 空 / 不处理 → 跳过
+  - 按照建议 → 按「处理分类」映射可自动动作并执行（删除类含星标上游）
   - 其它任意文字 → 归类意图；能自动则自动，否则写入进一步建议供 AI 分析
+    常见：删除（不标上游）、删除并标星、归档、星标上游、取消星标
+
+缺「人工处理」列的工作表会跳过（sheet_skipped），不中断其它表。
 
 Usage:
   python process_excel.py --from report.xlsx --dry-run
@@ -104,7 +107,7 @@ def classify_custom_intent(text: str, sheet: str) -> dict[str, Any]:
     if any(k in cn for k in ("不处理", "跳过", "忽略", "保留", "先不动", "暂不")):
         return {"intent": "skip", "auto": False, "note": "文字表示保留/跳过"}
 
-    # 删除 fork / 仓库
+    # 删除 fork / 仓库（「删除并标星」才星标上游；仅「删除」不标星）
     if any(k in cn for k in ("删除", "删掉", "删掉fork", "删 fork", "delete")):
         if sheet == "星标项目":
             return {
@@ -112,7 +115,13 @@ def classify_custom_intent(text: str, sheet: str) -> dict[str, Any]:
                 "auto": True,
                 "note": "星标表中的「删除」按取消星标理解；若指删仓需到仓库表操作",
             }
-        return {"intent": "delete_fork", "auto": True, "note": "识别为删除（Fork）", "star_parent": True}
+        star_parent = any(k in cn for k in ("标星", "打星", "并星", "star"))
+        return {
+            "intent": "delete_fork",
+            "auto": True,
+            "note": "识别为删除（Fork）" + ("并星标上游" if star_parent else ""),
+            "star_parent": star_parent,
+        }
 
     # 归档
     if any(k in cn for k in ("归档", "archive")):
@@ -539,12 +548,25 @@ def process_workbook(src: Path, out: Path, dry_run: bool) -> dict:
         # 仅当有删除意图时再强校验；此处先记录
         summary["auth_scopes"] = scopes
 
-    if "仓库" in wb.sheetnames:
+    def _has_manual(name: str) -> bool:
+        if name not in wb.sheetnames:
+            return False
+        return COL_MANUAL in _header_map(wb[name])
+
+    if _has_manual("仓库"):
         process_repo_sheet(wb["仓库"], dry_run, summary)
-    if "星标项目" in wb.sheetnames:
+    elif "仓库" in wb.sheetnames:
+        summary.setdefault("sheet_skipped", []).append("仓库:缺少人工处理列")
+
+    if _has_manual("星标项目"):
         process_star_sheet(wb["星标项目"], dry_run, summary)
-    if "工作流与密钥" in wb.sheetnames:
+    elif "星标项目" in wb.sheetnames:
+        summary.setdefault("sheet_skipped", []).append("星标项目:缺少人工处理列")
+
+    if _has_manual("工作流与密钥"):
         process_hygiene_sheet(wb["工作流与密钥"], dry_run, summary)
+    elif "工作流与密钥" in wb.sheetnames:
+        summary.setdefault("sheet_skipped", []).append("工作流与密钥:缺少人工处理列")
 
     # 汇总说明追加处理摘要
     if "汇总说明" in wb.sheetnames:
