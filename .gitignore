@@ -39,3 +39,6 @@ Desktop.ini
 output/
 *.xlsx
 audit.json
+
+# 技能改进时的可恢复基线快照
+.skill-improve-baseline/

@@ -1,0 +1,26 @@
+[
+  {
+    "query": "帮我清理一下 GitHub 上没提交过的 fork，顺便看看哪些仓该归档",
+    "should_trigger": true
+  },
+  {
+    "query": "导出一份 GitHub 整理 Excel，我要在「人工处理」列里勾选后再批量执行",
+    "should_trigger": true
+  },
+  {
+    "query": "审计一下自有仓失败的 Actions 和疑似没用的 Secrets",
+    "should_trigger": true
+  },
+  {
+    "query": "把这个 PR 的 CI 失败日志读一下，帮我修 workflow",
+    "should_trigger": false
+  },
+  {
+    "query": "用 gh 给某个 issue 留言并合并 pull request",
+    "should_trigger": false
+  },
+  {
+    "query": "帮我写一个 React 登录页，不需要接 GitHub API",
+    "should_trigger": false
+  }
+]

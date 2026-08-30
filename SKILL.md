@@ -1,44 +1,40 @@
 ---
 name: github-organize
-description: >-
-  审计并整理个人 GitHub 仓库与星标：找出无新提交的 fork、建议归档的自有仓、
-  可取消/归类的星标；可选审计自有仓 Actions 失败与疑似孤儿 Secrets（默认关闭）。
-  导出含「仓库」「星标项目」及可选「工作流与密钥」、「人工处理」列的 Excel。
-  可按填好的 Excel 自动执行可处理项，不可自动项由 AI 归类并给出进一步建议后回写。
-  检测逻辑优先跑 scripts/audit.py。在用户提到 GitHub 整理、清理 fork、整理星标、
-  归档仓库、workflow/secrets 审计、导出 GitHub Excel、按 Excel 处理、github-organize
-  时使用。
+description: "审计并整理个人 GitHub 仓库与星标：无新提交 fork、建议归档自有仓、可取消/归类星标；可选 Actions/Secrets 审计（默认关）；导出含人工处理列的 Excel，并可按表自动执行或 AI 归类回写。检测优先 scripts/audit.py。在用户提到 GitHub 整理、清理 fork、整理星标、归档仓库、workflow/secrets 审计、导出 GitHub Excel、按 Excel 处理、github-organize 时使用。通用 issue/PR/CI 用 github 技能。"
 ---
 
 # GitHub 整理（仓库 + 星标 + 可选工作流/密钥）
 
 **检测与分类一律用本技能脚本实现**；Agent 负责解读结果、向用户确认、再调用 `apply.py` 或 `process_excel.py` 执行。
 
-## 脚本一览
+## 运行约定
 
-路径相对本技能目录 `scripts/`：
+- 环境：本机已安装 `gh`（已验证 2.40.x+）与 Python 3.10+；Excel 需 `openpyxl`（导出/处理脚本会尝试自动安装）
+- 前置：`gh auth status`；删除仓库需 `delete_repo` scope；读 Secrets 需仓 admin
+- 允许效果：只读审计默认可跑；删除 / 归档 / 批量 unstar / 改 GitHub 状态必须先 `--dry-run`，用户确认后再 `--yes`
+- 主可观测量：审计 JSON 的 `summary`，以及 Excel「处理结果 / 进一步建议」回写
 
-| 脚本 | 作用 |
-|------|------|
-| [`common.py`](scripts/common.py) | 拉取 / 比对 / 分类 / **可选** workflow·secrets 审计 |
-| [`audit.py`](scripts/audit.py) | **检测入口**：输出审计 JSON + 摘要 |
-| [`export_report.py`](scripts/export_report.py) | 检测或读 JSON → Excel（含人工处理列） |
-| [`process_excel.py`](scripts/process_excel.py) | **按 Excel 人工处理列执行** → 回写处理结果 |
-| [`apply.py`](scripts/apply.py) | 确认后：星标上游、删 fork、归档、取消星标（按 audit JSON） |
+`SKILL_DIR` = 本技能根目录（例如 `$HOME/.agents/skills/github/github-organize`）。
 
-分类细则见 [reference.md](reference.md)。
+## 脚本与意图对照
 
-## 前置条件
+| 用户意图 | 命令 | 效果 | 验证 |
+|----------|------|------|------|
+| 审计仓/星标 | `python "$SKILL_DIR/scripts/audit.py"` | 写审计 JSON | 看 `summary`；破坏性无 |
+| 含 hygiene | 同上加 `--with-hygiene` | 另审计 Actions/Secrets | `summary.hygiene_skipped` 为 false |
+| 导出 Excel | `python "$SKILL_DIR/scripts/export_report.py"` | 生成 xlsx | 打开表头含「人工处理」 |
+| 按表执行 | `process_excel.py --from … --dry-run` → `--yes` | 回写处理结果 | 先 dry-run 摘要 |
+| 按 JSON 批量 | `apply.py --from … --dry-run` → `--yes` | 删 fork/归档/unstar 等 | 与 Excel 流程二选一 |
 
-```bash
-gh auth status
-```
+参数速查：`--keep` / `--out` / `--skip-stars` / `--skip-fork-enrich` / `--with-hygiene` / `--hygiene-include-archived`；`process_excel` / `apply` 的 `--dry-run` 与 `--yes`。
 
-- 删除仓库需要 `delete_repo`：`gh auth refresh -h github.com -s delete_repo`
-- 读取仓库 Secrets 需要对该仓有 **admin**（否则密钥审计会标「权限不足」）
-- Excel 需要 `openpyxl`（`export_report.py` / `process_excel.py` 会尝试自动安装）
+## 按需阅读
 
-`SKILL_DIR` = 技能根目录，例如 `$HOME/.agents/skills/github-organize`
+| 时机 | 阅读 | 用途 |
+|------|------|------|
+| 解释「处理分类」或改分类规则 | [`references/classification.md`](references/classification.md) | Fork/自有/星标/hygiene 规则与推荐顺序 |
+| 导出或按 Excel「人工处理」执行 | [`references/excel.md`](references/excel.md) | 列约定、可自动映射、缺列跳过 |
+| 删仓失败、孤儿 Secret、路径疑惑 | [`references/gotchas.md`](references/gotchas.md) | 已验证坑与口径 |
 
 ## 启动时：先选分析范围（必须）
 
@@ -100,8 +96,6 @@ python "$SKILL_DIR/scripts/audit.py" --keep "fork1,fork2" --with-hygiene
 python "$SKILL_DIR/scripts/audit.py" --skip-stars
 ```
 
-参数：`--keep` / `--out` / `--skip-stars` / `--skip-fork-enrich` / **`--with-hygiene`**（默认关） / `--hygiene-include-archived`
-
 ### 2. 汇报
 
 关注 `forks_suggest_delete` / `own_suggest_archive` / `stars_suggest_unstar`。  
@@ -117,7 +111,7 @@ python "$SKILL_DIR/scripts/export_report.py" --from audit.json --out report.xlsx
 
 标签页：**汇总说明** / **仓库** / **星标项目** / **工作流与密钥**（未启用 hygiene 时该表为空，汇总会注明未启用）
 
-每张数据表含列：**人工处理**（默认「不处理」）、**处理结果**、**进一步建议**。
+每张数据表含列：**人工处理**（默认「不处理」）、**处理结果**、**进一步建议**。列与映射细节见 [`references/excel.md`](references/excel.md)。
 
 导出成功后，**必须提示用户**：
 
@@ -137,22 +131,8 @@ python "$SKILL_DIR/scripts/process_excel.py" --from report.xlsx --yes --out resu
 
 - 先 `--dry-run`，把将执行项与「需 AI / 不可自动」项汇报给用户，确认后再 `--yes`
 - 脚本回写 Excel：**处理结果**、**进一步建议**；stdout 输出 JSON 摘要（含 `needs_ai`、可选 `sheet_skipped`）
-- 某数据表**缺少「人工处理」列**时：跳过该表并记入 `sheet_skipped`，不中断其它表
 - Agent 对 `needs_ai` / 处理结果为「需AI分析」「不可自动」的行：根据人工处理文字与行内上下文**归类意图**，给出可执行的进一步建议（密钥/CI/Lists 等仍不擅自破坏性操作）
 - 处理完成后把结果 Excel 路径与摘要返回用户
-
-可自动映射（「按照建议」或可识别文字）：
-
-| 表 | 条件 / 人工处理文字 | 自动动作 |
-|----|---------------------|----------|
-| 仓库 | 「按照建议」+ Fork 建议删除类 | 星标上游 + 删 fork |
-| 仓库 | 「按照建议」+ 自有建议归档类 | 归档 |
-| 仓库 | **删除** / 删掉 / delete | 删仓；**不**星标上游 |
-| 仓库 | **删除并标星**（文中含标星/打星/star） | 星标上游 + 删 fork |
-| 仓库 | **归档** / archive | 归档 |
-| 仓库 | 星标上游 / 打星上游 | 仅星标上游 |
-| 星标 | 「按照建议」+ 建议取消星标类；或「取消星标」 | unstar |
-| 工作流与密钥 | 任意 | **不自动**删密钥/改 CI；写入进一步建议 |
 
 ### 5. 按 audit JSON 执行（仅确认后，与步骤 4 二选一）
 
@@ -165,6 +145,10 @@ python "$SKILL_DIR/scripts/process_excel.py" --from report.xlsx --yes --out resu
 - 不要改 git config
 - Excel「人工处理」为「不处理」或**空** → 一律跳过
 - 「删除」≠「删除并标星」：仅后者（或「按照建议」的删除类）会星标上游
+
+## 完成标准
+
+每次调用在适用范围内满足：已确认分析范围（或用户已明示）、检测经本包脚本完成、汇报引用 `summary`（及启用时的 hygiene 字段）、任何 GitHub 变更均经 dry-run 确认，且分支所需参考文件已按上表加载。
 
 ## 与其它技能
 

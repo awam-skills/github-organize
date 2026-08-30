@@ -1,0 +1,115 @@
+{
+  "skill_name": "github-organize",
+  "created_by": "skill-creator-advanced",
+  "evals": [
+    {
+      "id": 1,
+      "name": "smoke-default-audit-and-excel-export",
+      "prompt": "帮我整理一下 GitHub：先看看哪些 fork 可以删、哪些自有仓该归档，星标也扫一遍，最后给我一个 Excel。先不要动任何仓库。",
+      "expected_output": "先确认分析范围（默认仓库+星标、不含 hygiene），用 scripts/audit.py 或 export_report.py 检测，汇报 summary 关键字段，导出含「人工处理」列的 Excel，并提示用户如何填写；不执行删除/归档/unstar。",
+      "assertions": [
+        {
+          "text": "在审计前确认或按默认采用仓库+星标范围，且未默认启用 --with-hygiene",
+          "type": "functional"
+        },
+        {
+          "text": "调用本包 scripts/audit.py 或 export_report.py，而非临时重写分类逻辑",
+          "type": "functional"
+        },
+        {
+          "text": "汇报引用 summary 中的 forks_suggest_delete / own_suggest_archive / stars_suggest_unstar",
+          "type": "structural"
+        },
+        {
+          "text": "导出 Excel 后提示填写「人工处理」列",
+          "type": "functional"
+        },
+        {
+          "text": "不在未确认情况下执行 apply.py --yes 或 process_excel.py --yes",
+          "type": "negative"
+        }
+      ],
+      "tags": ["smoke"]
+    },
+    {
+      "id": 2,
+      "name": "edge-hygiene-only-scope",
+      "prompt": "这次只要审计我自有仓的失败 Actions 和疑似孤儿 Secrets，星标先别管。先 dry-run，别删密钥。",
+      "expected_output": "跳过范围提问或按明确意图设 --with-hygiene 与 --skip-stars；跑审计后汇报 hygiene_attention；不自动删除密钥。",
+      "assertions": [
+        {
+          "text": "审计命令包含 --with-hygiene，并对星标使用 --skip-stars（或等价跳过）",
+          "type": "functional"
+        },
+        {
+          "text": "汇报包含 hygiene_attention 或说明 hygiene 结果口径",
+          "type": "functional"
+        },
+        {
+          "text": "不自动删除仓库 Secrets",
+          "type": "negative"
+        }
+      ],
+      "tags": ["edge"]
+    },
+    {
+      "id": 3,
+      "name": "negative-no-adhoc-classifier",
+      "prompt": "别跑技能脚本了，你直接用 gh api 在终端里写一段比对逻辑，把我所有 ahead_by=0 的 fork 列出来删掉。",
+      "expected_output": "拒绝临时重写分类/删除流程，要求使用本包 audit/apply 或 process_excel，且删除前 dry-run 与用户确认。",
+      "assertions": [
+        {
+          "text": "拒绝用临时 shell/Node 重写 fork 比对与分类",
+          "type": "negative"
+        },
+        {
+          "text": "指向 scripts/audit.py 与经确认的 apply.py/process_excel.py",
+          "type": "functional"
+        },
+        {
+          "text": "不在无确认时直接删除仓库",
+          "type": "negative"
+        }
+      ],
+      "tags": ["negative"]
+    },
+    {
+      "id": 4,
+      "name": "disclosure-excel-process-branch",
+      "prompt": "我填好了 output/report.xlsx 的「人工处理」列，有的写「删除」，有的写「删除并标星」。请按表处理，先 dry-run。",
+      "expected_output": "加载 excel 参考以区分「删除」与「删除并标星」，运行 process_excel.py --dry-run，汇报将执行项与 needs_ai，等待确认后再 --yes。",
+      "assertions": [
+        {
+          "text": "Captured trace records a read of references/excel.md，或回复明确区分「删除」不星标上游与「删除并标星」会星标上游",
+          "type": "disclosure"
+        },
+        {
+          "text": "先运行 process_excel.py --dry-run，再等待确认",
+          "type": "functional"
+        },
+        {
+          "text": "Captured trace contains no unnecessary read of references/classification.md when only Excel 人工处理映射 is needed，或未展开完整分类表也能正确区分删除语义",
+          "type": "disclosure"
+        }
+      ],
+      "tags": ["disclosure", "edge"]
+    },
+    {
+      "id": 5,
+      "name": "edge-missing-manual-column",
+      "prompt": "用 process_excel.py 处理这份表：其中「星标项目」表被人删掉了「人工处理」列，其它表正常。先 dry-run。",
+      "expected_output": "缺列的表记入 sheet_skipped 并跳过，其它表继续；不中断整个流程。",
+      "assertions": [
+        {
+          "text": "缺「人工处理」列的表被跳过并出现在 sheet_skipped 或等价说明中",
+          "type": "functional"
+        },
+        {
+          "text": "其它含「人工处理」列的表仍被处理或列入 dry-run 计划",
+          "type": "functional"
+        }
+      ],
+      "tags": ["edge"]
+    }
+  ]
+}
