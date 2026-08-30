@@ -2,15 +2,15 @@
 name: github-organize
 description: >-
   审计并整理个人 GitHub 仓库与星标：找出无新提交的 fork、建议归档的自有仓、
-  可取消/归类的星标；并审计自有仓 Actions 失败与疑似孤儿 Secrets，导出含
-  「仓库」「星标项目」「工作流与密钥」及「人工处理」列的 Excel。可按填好的
-  Excel 自动执行可处理项，不可自动项由 AI 归类并给出进一步建议后回写处理结果。
+  可取消/归类的星标；可选审计自有仓 Actions 失败与疑似孤儿 Secrets（默认关闭）。
+  导出含「仓库」「星标项目」及可选「工作流与密钥」、「人工处理」列的 Excel。
+  可按填好的 Excel 自动执行可处理项，不可自动项由 AI 归类并给出进一步建议后回写。
   检测逻辑优先跑 scripts/audit.py。在用户提到 GitHub 整理、清理 fork、整理星标、
   归档仓库、workflow/secrets 审计、导出 GitHub Excel、按 Excel 处理、github-organize
   时使用。
 ---
 
-# GitHub 整理（仓库 + 星标 + 工作流/密钥）
+# GitHub 整理（仓库 + 星标 + 可选工作流/密钥）
 
 **检测与分类一律用本技能脚本实现**；Agent 负责解读结果、向用户确认、再调用 `apply.py` 或 `process_excel.py` 执行。
 
@@ -20,7 +20,7 @@ description: >-
 
 | 脚本 | 作用 |
 |------|------|
-| [`common.py`](scripts/common.py) | 拉取 / 比对 / 分类 / **workflow·secrets 审计** |
+| [`common.py`](scripts/common.py) | 拉取 / 比对 / 分类 / **可选** workflow·secrets 审计 |
 | [`audit.py`](scripts/audit.py) | **检测入口**：输出审计 JSON + 摘要 |
 | [`export_report.py`](scripts/export_report.py) | 检测或读 JSON → Excel（含人工处理列） |
 | [`process_excel.py`](scripts/process_excel.py) | **按 Excel 人工处理列执行** → 回写处理结果 |
@@ -40,27 +40,49 @@ gh auth status
 
 `SKILL_DIR` = 技能根目录，例如 `$HOME/.agents/skills/github-organize`
 
-默认产物目录：`$SKILL_DIR/output/`（`audit.py` / `export_report.py` 未指定 `--out` 时写入此处；`output/` 已 gitignore，不入代码归档）。
+## 启动时：先选分析范围（必须）
+
+在跑 `audit.py` / `export_report.py` **之前**，向用户给出分析可选项并等待确认。
+
+**优先用 `AskQuestion` 多选**（`allow_multiple: true`）。若工具支持选项默认勾选 / `selected`，则按下表预勾；不支持则在 prompt 中写明默认项，用户直接确认即按默认执行。
+
+| 选项 id | 标签 | 默认勾选 | 脚本映射 |
+|---------|------|----------|----------|
+| `repos` | 仓库（Fork 清理 / 自有仓归档） | **是** | 始终包含（基础项） |
+| `stars` | 星标整理 | **是** | 未选 → `--skip-stars` |
+| `hygiene` | 工作流与密钥（Actions 失败 / 疑似孤儿 Secret） | **否** | 选中 → `--with-hygiene` |
+
+提示文案示例：
+
+> 本次 GitHub 整理要分析哪些内容？（可多选；默认已勾选「仓库」「星标」，工作流/密钥较慢且需 admin，默认不勾）
+
+规则：
+
+1. **用户已在消息里明确范围**（如「只整理星标」「审计 secrets」）→ 可跳过提问，直接按意图设 flag。
+2. **至少保留一项**；若只勾了 hygiene、没勾仓库/星标，仍跑仓库基础拉取（hygiene 依赖自有仓列表），但可加 `--skip-stars`。
+3. 脚本**默认不含** workflow/secret 检测；只有用户勾选 hygiene 或明确要求时才传 `--with-hygiene`。
+4. 无 `AskQuestion` 时，用简短列表提问，并标明 `[✓] 仓库` `[✓] 星标` `[ ] 工作流与密钥`。
 
 ## 进度清单
 
 ```
 GitHub 整理进度:
 - [ ] 1. gh auth status
-- [ ] 2. 运行 audit.py（含 hygiene，除非 --skip-hygiene）
-- [ ] 3. 根据 summary 汇报（含 hygiene_attention）
-- [ ] 4. （可选）export_report.py 导出 Excel
-- [ ] 5. 提示用户：可在各表「人工处理」列逐行填写后，用 process_excel.py 回写处理
-- [ ] 6. （可选）用户填完 Excel 后 process_excel.py --dry-run → --yes
-- [ ] 7. （可选）对「需AI分析 / 不可自动」行：Agent 归类并给出进一步建议
-- [ ] 8. （可选）用户确认后 apply.py --dry-run → --yes（按 JSON 批量，与 Excel 流程二选一即可）
+- [ ] 2. AskQuestion 确认分析范围（默认勾选：仓库 + 星标）
+- [ ] 3. 运行 audit.py / export_report.py（仅在勾选时加 --with-hygiene）
+- [ ] 4. 根据 summary 汇报（若启用 hygiene 则含 hygiene_attention）
+- [ ] 5. （可选）export_report.py 导出 Excel
+- [ ] 6. 提示用户：可在各表「人工处理」列逐行填写后，用 process_excel.py 回写处理
+- [ ] 7. （可选）用户填完 Excel 后 process_excel.py --dry-run → --yes
+- [ ] 8. （可选）对「需AI分析 / 不可自动」行：Agent 归类并给出进一步建议
+- [ ] 9. （可选）用户确认后 apply.py --dry-run → --yes（按 JSON 批量，与 Excel 流程二选一即可）
 ```
 
 ## 强制规则：检测走代码
 
 1. **禁止**用临时 shell/Node 重写 fork 比对、星标分页、workflow/secrets 审计、分类规则。
 2. **必须**调用 `audit.py` 或 `export_report.py`。
-3. 汇报优先用 `summary`：`forks_suggest_delete` / `own_suggest_archive` / `stars_suggest_unstar` / **`hygiene_attention`**。
+3. 汇报优先用 `summary`：`forks_suggest_delete` / `own_suggest_archive` / `stars_suggest_unstar`；启用 hygiene 时还有 **`hygiene_attention`**。
 4. 破坏性操作**只能**经 `apply.py` 或 `process_excel.py`，且先 `--dry-run`，确认后再 `--yes`。密钥删除默认不自动执行。
 
 ## 工作流
@@ -68,23 +90,32 @@ GitHub 整理进度:
 ### 1. 审计
 
 ```bash
+# 默认：仓库 + 星标（不含 workflow/secrets）
 python "$SKILL_DIR/scripts/audit.py" --keep "fork1,fork2"
+
+# 用户勾选了工作流与密钥时：
+python "$SKILL_DIR/scripts/audit.py" --keep "fork1,fork2" --with-hygiene
+
+# 仅仓库、跳过星标：
+python "$SKILL_DIR/scripts/audit.py" --skip-stars
 ```
 
-参数：`--keep` / `--out` / `--skip-stars` / `--skip-fork-enrich` / **`--skip-hygiene`** / `--hygiene-include-archived`
+参数：`--keep` / `--out` / `--skip-stars` / `--skip-fork-enrich` / **`--with-hygiene`**（默认关） / `--hygiene-include-archived`
 
 ### 2. 汇报
 
-关注 `hygiene_attention`（工作流失败、孤儿密钥等）与 `hygiene_by_cat`。
+关注 `forks_suggest_delete` / `own_suggest_archive` / `stars_suggest_unstar`。  
+若 `summary.hygiene_skipped` 为 false，再汇报 `hygiene_attention` 与 `hygiene_by_cat`。
 
 ### 3. 导出 Excel
 
 ```bash
 python "$SKILL_DIR/scripts/export_report.py" --keep "a,b" --audit-out audit.json
+python "$SKILL_DIR/scripts/export_report.py" --with-hygiene --keep "a,b"
 python "$SKILL_DIR/scripts/export_report.py" --from audit.json --out report.xlsx
 ```
 
-标签页：**汇总说明** / **仓库** / **星标项目** / **工作流与密钥**
+标签页：**汇总说明** / **仓库** / **星标项目** / **工作流与密钥**（未启用 hygiene 时该表为空，汇总会注明未启用）
 
 每张数据表含列：**人工处理**（默认「不处理」）、**处理结果**、**进一步建议**。
 
@@ -132,4 +163,4 @@ python "$SKILL_DIR/scripts/process_excel.py" --from report.xlsx --yes --out resu
 ## 与其它技能
 
 - 通用 issue/PR/CI：`github` 技能
-- 本技能：仓卫生 + 星标 + workflow/secrets + Excel + 按表回写处理
+- 本技能：仓卫生 + 星标 + 可选 workflow/secrets + Excel + 按表回写处理

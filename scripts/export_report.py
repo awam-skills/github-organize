@@ -4,6 +4,7 @@
 
 Usage:
   python export_report.py
+  python export_report.py --with-hygiene
   python export_report.py --from audit.json --out report.xlsx
   python export_report.py --keep a,b
 """
@@ -153,7 +154,10 @@ def write_excel(
     fork_n = sum(1 for r in repo_rows if r["type"] == "Fork")
     ws0["A3"] = f"仓库总数: {len(repo_rows)}（自有 {own_n} / Fork {fork_n}）"
     ws0["A4"] = f"星标总数: {len(star_rows)}"
-    ws0["A5"] = f"工作流/密钥审计仓数: {len(hygiene_rows)}"
+    if hygiene_rows:
+        ws0["A5"] = f"工作流/密钥审计仓数: {len(hygiene_rows)}"
+    else:
+        ws0["A5"] = "工作流/密钥审计: 未启用（导出默认跳过；需 --with-hygiene）"
     if keep:
         ws0["A6"] = "指定保留 Fork: " + ", ".join(sorted(keep))
 

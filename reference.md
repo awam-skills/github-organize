@@ -94,6 +94,8 @@ GET /repos/{owner}/{repo}/commits?author={login}&per_page=1
 
 实现：`scripts/common.py` → `audit_one_repo_hygiene` / `audit_hygiene`；Excel 处理 → `process_excel.py`。
 
+**默认关闭**：`audit.py` / `export_report.py` 默认不跑 hygiene；需显式 `--with-hygiene`（或 Agent 分析范围勾选「工作流与密钥」）。
+
 | 条件 | 处理分类 |
 |------|----------|
 | 近期 Actions 有 failure 运行 | 建议检查-工作流失败 |
