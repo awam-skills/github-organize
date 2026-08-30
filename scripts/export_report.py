@@ -39,10 +39,15 @@ except ImportError:
 def row_fill(cat: str):
     fills = {
         "建议删除": PatternFill("solid", fgColor="FCE4EC"),
+        "建议清理": PatternFill("solid", fgColor="FCE4EC"),
+        "建议检查": PatternFill("solid", fgColor="FCE4EC"),
         "建议归档": PatternFill("solid", fgColor="FFF3E0"),
+        "建议关注": PatternFill("solid", fgColor="FFF8E1"),
         "建议评估": PatternFill("solid", fgColor="FFF8E1"),
         "建议取消": PatternFill("solid", fgColor="FCE4EC"),
+        "权限不足": PatternFill("solid", fgColor="ECEFF1"),
         "活跃": PatternFill("solid", fgColor="E8F5E9"),
+        "正常": PatternFill("solid", fgColor="E8F5E9"),
         "保留": PatternFill("solid", fgColor="E3F2FD"),
         "已归档": PatternFill("solid", fgColor="ECEFF1"),
         "近期": PatternFill("solid", fgColor="E8F5E9"),
@@ -72,8 +77,7 @@ def autosize(ws, max_width=48):
         ws.column_dimensions[letter].width = max(12, min(max_width, length + 2))
 
 
-def write_excel(out: Path, login: str, repo_rows: list, star_rows: list, keep: set[str]) -> None:
-    wb = Workbook()
+def _write_sheet(ws, headers, rows, value_fn, filter_cols: str):
     wrap = Alignment(wrap_text=True, vertical="top")
     thin = Border(
         left=Side(style="thin", color="D9D9D9"),
@@ -81,6 +85,32 @@ def write_excel(out: Path, login: str, repo_rows: list, star_rows: list, keep: s
         top=Side(style="thin", color="D9D9D9"),
         bottom=Side(style="thin", color="D9D9D9"),
     )
+    style_header(ws, headers)
+    for i, row in enumerate(rows, 2):
+        vals = value_fn(row)
+        for j, v in enumerate(vals, 1):
+            cell = ws.cell(i, j, v)
+            cell.alignment = wrap
+            cell.border = thin
+        f = row_fill(row.get("cat", ""))
+        if f:
+            for j in range(1, len(vals) + 1):
+                ws.cell(i, j).fill = f
+    if rows:
+        ws.auto_filter.ref = f"A1:{filter_cols}{len(rows)+1}"
+    ws.freeze_panes = "A2"
+    autosize(ws)
+
+
+def write_excel(
+    out: Path,
+    login: str,
+    repo_rows: list,
+    star_rows: list,
+    hygiene_rows: list,
+    keep: set[str],
+) -> None:
+    wb = Workbook()
 
     ws0 = wb.active
     ws0.title = "汇总说明"
@@ -91,103 +121,106 @@ def write_excel(out: Path, login: str, repo_rows: list, star_rows: list, keep: s
     fork_n = sum(1 for r in repo_rows if r["type"] == "Fork")
     ws0["A3"] = f"仓库总数: {len(repo_rows)}（自有 {own_n} / Fork {fork_n}）"
     ws0["A4"] = f"星标总数: {len(star_rows)}"
+    ws0["A5"] = f"工作流/密钥审计仓数: {len(hygiene_rows)}"
     if keep:
-        ws0["A5"] = "指定保留 Fork: " + ", ".join(sorted(keep))
+        ws0["A6"] = "指定保留 Fork: " + ", ".join(sorted(keep))
 
-    ws0["A7"] = "仓库处理分类统计"
-    ws0["A7"].font = Font(bold=True)
-    ws0["A8"] = "分类"
-    ws0["B8"] = "数量"
-    row_i = 9
-    for k, v in sorted(Counter(r["cat"] for r in repo_rows).items(), key=lambda x: -x[1]):
-        ws0[f"A{row_i}"] = k
-        ws0[f"B{row_i}"] = v
+    row_i = 8
+    for title, counter in [
+        ("仓库处理分类统计", Counter(r["cat"] for r in repo_rows)),
+        ("星标处理分类统计", Counter(r["cat"] for r in star_rows)),
+        ("工作流与密钥分类统计", Counter(r["cat"] for r in hygiene_rows)),
+    ]:
+        ws0[f"A{row_i}"] = title
+        ws0[f"A{row_i}"].font = Font(bold=True)
+        row_i += 1
+        ws0[f"A{row_i}"] = "分类"
+        ws0[f"B{row_i}"] = "数量"
+        row_i += 1
+        for k, v in sorted(counter.items(), key=lambda x: -x[1]):
+            ws0[f"A{row_i}"] = k
+            ws0[f"B{row_i}"] = v
+            row_i += 1
         row_i += 1
 
-    row_i += 1
-    ws0[f"A{row_i}"] = "星标处理分类统计"
-    ws0[f"A{row_i}"].font = Font(bold=True)
-    row_i += 1
-    ws0[f"A{row_i}"] = "分类"
-    ws0[f"B{row_i}"] = "数量"
-    row_i += 1
-    for k, v in sorted(Counter(r["cat"] for r in star_rows).items(), key=lambda x: -x[1]):
-        ws0[f"A{row_i}"] = k
-        ws0[f"B{row_i}"] = v
-        row_i += 1
-
-    row_i += 1
     ws0[f"A{row_i}"] = "使用说明"
     ws0[f"A{row_i}"].font = Font(bold=True)
     for n in [
-        "1. 「仓库」：自有仓 + Fork，含处理分类与建议；可用筛选按分类过滤。",
-        "2. 「星标项目」：全部星标；建议取消/评估的排在前面；「建议归入List」用于建 GitHub Lists。",
-        "3. 颜色：红粉=建议删除/取消；橙=建议归档；黄=需评估；绿=活跃/近期；蓝=保留；灰=已归档。",
-        "4. 删除 Fork / 归档前请再确认；本表仅为建议。",
-        "5. 检测由 scripts/audit.py / common.py 完成，勿手写重复检测逻辑。",
+        "1. 「仓库」：自有仓 + Fork，含处理分类与建议。",
+        "2. 「星标项目」：全部星标；「建议归入List」用于建 GitHub Lists。",
+        "3. 「工作流与密钥」：自有仓的 Actions 失败、疑似孤儿 Secret、CodeQL 状态。",
+        "4. 孤儿密钥=仓库 Secrets 列表中存在，但未在 .github/workflows 文本中以 secrets.NAME 引用。",
+        "5. 颜色：红粉=建议删除/清理/检查；橙=归档；黄=关注/评估；绿=正常/活跃；灰=已归档/权限不足。",
+        "6. 删除密钥或改 Settings 前请再确认；本表仅为建议。",
     ]:
         row_i += 1
         ws0[f"A{row_i}"] = n
-    ws0.column_dimensions["A"].width = 80
+    ws0.column_dimensions["A"].width = 90
     ws0.column_dimensions["B"].width = 12
 
     ws1 = wb.create_sheet("仓库")
-    repo_headers = [
-        "仓库名", "完整名", "类型", "可见性", "是否归档", "主语言",
-        "Stars", "描述", "创建时间", "最后推送", "距今推送天数",
-        "上游仓库", "领先提交ahead", "落后behind", "本人提交(默认分支)",
-        "处理分类", "建议", "URL",
-    ]
-    style_header(ws1, repo_headers)
-    for i, row in enumerate(repo_rows, 2):
-        vals = [
+    _write_sheet(
+        ws1,
+        [
+            "仓库名", "完整名", "类型", "可见性", "是否归档", "主语言",
+            "Stars", "描述", "创建时间", "最后推送", "距今推送天数",
+            "上游仓库", "领先提交ahead", "落后behind", "本人提交(默认分支)",
+            "处理分类", "建议", "URL",
+        ],
+        repo_rows,
+        lambda row: [
             row["name"], row["full"], row["type"], row["vis"], row["archived"], row["lang"],
             row["stars"], row["desc"], row["created"], row["pushed"], row["days"],
             row["parent"], row["ahead"], row["behind"], row["user_c"],
             row["cat"], row["advice"], row["url"],
-        ]
-        for j, v in enumerate(vals, 1):
-            cell = ws1.cell(i, j, v)
-            cell.alignment = wrap
-            cell.border = thin
-        f = row_fill(row["cat"])
-        if f:
-            for j in range(1, len(vals) + 1):
-                ws1.cell(i, j).fill = f
-    ws1.auto_filter.ref = f"A1:R{len(repo_rows)+1}"
-    ws1.freeze_panes = "A2"
-    autosize(ws1)
+        ],
+        "R",
+    )
     ws1.column_dimensions["H"].width = 40
     ws1.column_dimensions["Q"].width = 55
 
     ws2 = wb.create_sheet("星标项目")
-    star_headers = [
-        "仓库", "Owner", "主语言", "Topics", "描述",
-        "上游Stars", "是否归档", "是否Fork",
-        "最后推送", "距今推送天数", "星标时间", "距今星标天数",
-        "处理分类", "建议归入List", "建议", "URL",
-    ]
-    style_header(ws2, star_headers)
-    for i, row in enumerate(star_rows, 2):
-        vals = [
+    _write_sheet(
+        ws2,
+        [
+            "仓库", "Owner", "主语言", "Topics", "描述",
+            "上游Stars", "是否归档", "是否Fork",
+            "最后推送", "距今推送天数", "星标时间", "距今星标天数",
+            "处理分类", "建议归入List", "建议", "URL",
+        ],
+        star_rows,
+        lambda row: [
             row["repo"], row["owner"], row["lang"], row["topics"], row["desc"],
             row["stars"], row["archived"], row["fork"],
             row["pushed"], row["pdays"], row["starred"], row["sdays"],
             row["cat"], row["list"], row["advice"], row["url"],
-        ]
-        for j, v in enumerate(vals, 1):
-            cell = ws2.cell(i, j, v)
-            cell.alignment = wrap
-            cell.border = thin
-        f = row_fill(row["cat"])
-        if f:
-            for j in range(1, len(vals) + 1):
-                ws2.cell(i, j).fill = f
-    ws2.auto_filter.ref = f"A1:P{len(star_rows)+1}"
-    ws2.freeze_panes = "A2"
-    autosize(ws2)
+        ],
+        "P",
+    )
     ws2.column_dimensions["E"].width = 40
     ws2.column_dimensions["O"].width = 55
+
+    ws3 = wb.create_sheet("工作流与密钥")
+    _write_sheet(
+        ws3,
+        [
+            "仓库", "是否归档", "有Workflow", "Workflow数",
+            "近期失败运行数", "失败工作流名",
+            "Secrets数", "孤儿Secrets数", "孤儿Secrets列表",
+            "CodeQL状态", "处理分类", "建议", "备注/错误", "URL",
+        ],
+        hygiene_rows,
+        lambda row: [
+            row.get("full"), row.get("archived"), row.get("has_workflows"), row.get("workflow_count"),
+            row.get("failed_runs_30d"), row.get("failed_workflow_names"),
+            row.get("secret_count"), row.get("orphan_secret_count"), row.get("orphan_secrets"),
+            row.get("codeql"), row.get("cat"), row.get("advice"), row.get("error"), row.get("url"),
+        ],
+        "N",
+    )
+    ws3.column_dimensions["F"].width = 36
+    ws3.column_dimensions["I"].width = 36
+    ws3.column_dimensions["L"].width = 55
 
     wb.save(out)
 
@@ -200,28 +233,33 @@ def main() -> int:
     parser.add_argument("--keep", default="", help="Comma-separated fork names to keep")
     parser.add_argument("--skip-fork-enrich", action="store_true")
     parser.add_argument("--skip-stars", action="store_true")
+    parser.add_argument("--skip-hygiene", action="store_true", help="Skip workflow/secrets audit")
+    parser.add_argument("--hygiene-include-archived", action="store_true")
     args = parser.parse_args()
     keep = {x.strip() for x in args.keep.split(",") if x.strip()}
 
     if args.src:
         audit = load_audit(Path(args.src))
         if keep:
-            # keep only affects classification; re-classify not done here — warn
             print("note: --keep ignored when --from is set (use keep at audit time)", flush=True)
         login = audit["summary"]["login"]
         repo_rows = audit["repos"]
         star_rows = audit["stars"]
+        hygiene_rows = audit.get("hygiene") or []
         keep = set(audit["summary"].get("keep") or [])
     else:
         audit = run_audit(
             keep,
             skip_fork_enrich=args.skip_fork_enrich,
             skip_stars=args.skip_stars,
+            skip_hygiene=args.skip_hygiene,
+            hygiene_include_archived=args.hygiene_include_archived,
             progress=True,
         )
         login = audit["summary"]["login"]
         repo_rows = audit["repos"]
         star_rows = audit["stars"]
+        hygiene_rows = audit.get("hygiene") or []
         if args.audit_out:
             save_audit(audit, Path(args.audit_out))
             print(f"audit json: {args.audit_out}", flush=True)
@@ -231,9 +269,9 @@ def main() -> int:
     )
     out.parent.mkdir(parents=True, exist_ok=True)
     print(f"writing {out} ...", flush=True)
-    write_excel(out, login, repo_rows, star_rows, keep)
+    write_excel(out, login, repo_rows, star_rows, hygiene_rows, keep)
     print(f"OK: {out}")
-    print(f"repos={len(repo_rows)} stars={len(star_rows)}")
+    print(f"repos={len(repo_rows)} stars={len(star_rows)} hygiene={len(hygiene_rows)}")
     return 0
 
 

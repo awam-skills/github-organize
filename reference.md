@@ -78,9 +78,27 @@ GET /repos/{owner}/{repo}/commits?author={login}&per_page=1
 
 仓库、Owner、主语言、Topics、描述、上游 Stars、是否归档、是否 Fork、最后推送、距今推送天数、星标时间、距今星标天数、处理分类、建议归入 List、建议、URL
 
+### 工作流与密钥（自有仓）
+
+仓库、是否归档、有 Workflow、Workflow 数、近期失败运行数、失败工作流名、Secrets 数、孤儿 Secrets 数、孤儿列表、CodeQL 状态、处理分类、建议、备注/错误、URL
+
+实现：`scripts/common.py` → `audit_one_repo_hygiene` / `audit_hygiene`。
+
+| 条件 | 处理分类 |
+|------|----------|
+| 近期 Actions 有 failure 运行 | 建议检查-工作流失败 |
+| Secret 未在 `.github/workflows` 中以 `secrets.NAME` 出现 | 建议清理-疑似孤儿密钥 |
+| 有 Secret 但无 workflow | 建议关注-有密钥无工作流 |
+| 有 workflow 但读不到 secrets（无 admin） | 权限不足-跳过密钥 |
+| CodeQL default setup 未配置 | 建议关注-CodeQL未配置 |
+| 其它 | 正常 |
+
+说明：失败运行来自 `actions/runs?status=failure` 最近一页，非严格日历 30 天；孤儿判定基于 workflow 文件文本，**动态名 / 可复用 workflow / 组织级密钥** 可能误报，删除前请人工确认。
+
 ## 推荐执行顺序（给用户的建议）
 
 1. 删除「无新提交」类 fork（先星标上游）
 2. 批量 Archive 超过 1–3 年未更新的自有仓
-3. 为星标建 GitHub Lists，优先处理「建议取消」与「近期星标」
-4. Profile 只 pin 少量活跃项目
+3. 处理「工作流与密钥」表中失败 CI / 孤儿 Secret
+4. 为星标建 GitHub Lists，优先处理「建议取消」与「近期星标」
+5. Profile 只 pin 少量活跃项目

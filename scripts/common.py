@@ -425,11 +425,251 @@ def build_star_row(s: dict) -> dict:
     }
 
 
+HYGIENE_PRIO = {
+    "建议检查-工作流失败": 0,
+    "建议清理-疑似孤儿密钥": 1,
+    "建议关注-有密钥无工作流": 2,
+    "建议关注-CodeQL未配置": 3,
+    "权限不足-跳过密钥": 4,
+    "正常": 9,
+    "已归档-跳过": 10,
+}
+
+
+def _workflow_text_blob(full: str) -> tuple[int, str]:
+    """Return (file_count, concatenated workflow file texts)."""
+    import base64
+    import re
+
+    listing = run_gh(["api", f"repos/{full}/contents/.github/workflows"], check=False)
+    if listing.returncode != 0:
+        return 0, ""
+    try:
+        items = json.loads(listing.stdout)
+    except Exception:
+        return 0, ""
+    if not isinstance(items, list):
+        return 0, ""
+    texts: list[str] = []
+    count = 0
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        name = it.get("name") or ""
+        if not (name.endswith(".yml") or name.endswith(".yaml")):
+            continue
+        path = it.get("path")
+        if not path:
+            continue
+        count += 1
+        fr = run_gh(["api", f"repos/{full}/contents/{path}"], check=False)
+        if fr.returncode != 0:
+            continue
+        try:
+            meta = json.loads(fr.stdout)
+            content = meta.get("content") or ""
+            content = re.sub(r"\s+", "", content)
+            body = base64.b64decode(content).decode("utf-8", errors="replace")
+            texts.append(body)
+        except Exception:
+            continue
+    return count, "\n".join(texts)
+
+
+def _secret_referenced(name: str, blob: str) -> bool:
+    if not name or not blob:
+        return False
+    patterns = (
+        f"secrets.{name}",
+        f"secrets['{name}']",
+        f'secrets["{name}"]',
+        f"secrets.{name.lower()}",  # unlikely but cheap
+    )
+    return any(p in blob for p in patterns)
+
+
+def audit_one_repo_hygiene(full: str, *, archived: bool = False) -> dict:
+    """Workflow + Actions secrets + light CodeQL check for one owned repo."""
+    row: dict[str, Any] = {
+        "full": full,
+        "name": full.split("/")[-1],
+        "archived": "是" if archived else "否",
+        "has_workflows": "否",
+        "workflow_count": 0,
+        "failed_runs_30d": 0,
+        "failed_workflow_names": "",
+        "secret_count": 0,
+        "orphan_secret_count": 0,
+        "orphan_secrets": "",
+        "codeql": "",
+        "cat": "正常",
+        "advice": "未见明显工作流/密钥问题。",
+        "url": f"https://github.com/{full}",
+        "error": "",
+        "_prio": HYGIENE_PRIO["正常"],
+    }
+    if archived:
+        row["cat"] = "已归档-跳过"
+        row["advice"] = "已归档仓库默认不深入审计工作流与密钥。"
+        row["_prio"] = HYGIENE_PRIO["已归档-跳过"]
+        return row
+
+    # Workflows list
+    wf = run_gh(
+        ["api", f"repos/{full}/actions/workflows", "--jq", "{total:.total_count,names:[.workflows[].name]}"],
+        check=False,
+    )
+    workflow_names: list[str] = []
+    if wf.returncode == 0:
+        try:
+            data = json.loads(wf.stdout)
+            row["workflow_count"] = data.get("total") or 0
+            workflow_names = data.get("names") or []
+            row["has_workflows"] = "是" if row["workflow_count"] else "否"
+        except Exception as e:
+            row["error"] = f"workflows_parse:{e}"
+    else:
+        err = (wf.stderr or wf.stdout or "").strip()[:120]
+        row["error"] = f"workflows:{err}"
+
+    # Recent failures (last ~30 days window approximated by fetching recent failures)
+    fail = run_gh(
+        [
+            "api",
+            f"repos/{full}/actions/runs?status=failure&per_page=20",
+            "--jq",
+            "{count:(.workflow_runs|length),names:[.workflow_runs[].name]}",
+        ],
+        check=False,
+    )
+    failed_names: list[str] = []
+    if fail.returncode == 0:
+        try:
+            fd = json.loads(fail.stdout)
+            # Deduplicate names; count unique recent failures listed
+            failed_names = list(dict.fromkeys(fd.get("names") or []))
+            row["failed_runs_30d"] = fd.get("count") or 0
+            row["failed_workflow_names"] = ", ".join(failed_names[:8])
+        except Exception:
+            pass
+
+    # Secrets + orphan detection
+    sec = run_gh(
+        ["api", f"repos/{full}/actions/secrets", "--jq", "{count:.total_count,names:[.secrets[].name]}"],
+        check=False,
+    )
+    secret_names: list[str] = []
+    secrets_denied = False
+    if sec.returncode == 0:
+        try:
+            sd = json.loads(sec.stdout)
+            secret_names = sd.get("names") or []
+            row["secret_count"] = sd.get("count") or len(secret_names)
+        except Exception as e:
+            row["error"] = (row["error"] + f";secrets_parse:{e}").strip(";")
+    else:
+        err = (sec.stderr or sec.stdout or "").lower()
+        if "403" in err or "not found" in err or "404" in err:
+            secrets_denied = True
+            row["error"] = (row["error"] + ";secrets:no_admin_or_disabled").strip(";")
+        else:
+            row["error"] = (row["error"] + f";secrets:{(sec.stderr or sec.stdout or '')[:80]}").strip(";")
+
+    orphans: list[str] = []
+    if secret_names:
+        _wf_files, blob = _workflow_text_blob(full)
+        # Also include workflow names from API as weak signal — orphans need file text
+        for name in secret_names:
+            if not _secret_referenced(name, blob):
+                orphans.append(name)
+        row["orphan_secret_count"] = len(orphans)
+        row["orphan_secrets"] = ", ".join(orphans)
+
+    # CodeQL default setup (best-effort)
+    cq = run_gh(
+        ["api", f"repos/{full}/code-scanning/default-setup", "--jq", ".state // .message // ."],
+        check=False,
+    )
+    if cq.returncode == 0:
+        state = (cq.stdout or "").strip().strip('"')
+        row["codeql"] = state[:80] or "unknown"
+    else:
+        msg = (cq.stderr or cq.stdout or "").strip()
+        if "Advanced Security must be enabled" in msg or "403" in msg:
+            row["codeql"] = "不可用/未开通"
+        elif "404" in msg:
+            row["codeql"] = "未配置"
+        else:
+            row["codeql"] = "查询失败"
+
+    # Classification
+    if row["failed_runs_30d"] and row["failed_runs_30d"] > 0:
+        row["cat"] = "建议检查-工作流失败"
+        row["advice"] = (
+            f"近期有 {row['failed_runs_30d']} 条失败的 Actions 运行"
+            + (f"（{row['failed_workflow_names']}）" if row["failed_workflow_names"] else "")
+            + "；建议打开 Actions 排查或禁用无用 workflow。"
+        )
+    elif orphans:
+        row["cat"] = "建议清理-疑似孤儿密钥"
+        row["advice"] = (
+            f"发现 {len(orphans)} 个疑似未被 workflow 引用的 Actions Secret"
+            f"（{', '.join(orphans[:6])}）；确认无外部用途后可删除。"
+        )
+    elif row["secret_count"] and row["has_workflows"] == "否":
+        row["cat"] = "建议关注-有密钥无工作流"
+        row["advice"] = "仓库有 Actions Secret 但未见 workflow；可能是遗留配置，确认后清理密钥或补回 workflow。"
+    elif secrets_denied and row["has_workflows"] == "是":
+        row["cat"] = "权限不足-跳过密钥"
+        row["advice"] = "无法读取 secrets（需 admin）；工作流侧可正常查看。如需孤儿密钥审计请提升权限。"
+    elif row["codeql"] in ("未配置", "NotFound", "null") and row["has_workflows"] == "是":
+        row["cat"] = "建议关注-CodeQL未配置"
+        row["advice"] = "存在 Actions 但 CodeQL default setup 似乎未启用；按需在 Security 中配置。"
+    else:
+        row["cat"] = "正常"
+        tips = []
+        if row["has_workflows"] == "否" and not row["secret_count"]:
+            tips.append("无 Actions / 无仓库级 Secret（常见于纯代码仓）。")
+        row["advice"] = "；".join(tips) if tips else "未见明显工作流/密钥问题。"
+
+    row["_prio"] = HYGIENE_PRIO.get(row["cat"], 50)
+    return row
+
+
+def audit_hygiene(
+    login: str,
+    repos: list[dict],
+    *,
+    include_archived: bool = False,
+    include_forks: bool = False,
+    progress: bool = True,
+) -> list[dict]:
+    """Audit workflows/secrets for owned repos (skips forks by default)."""
+    targets = []
+    for r in repos:
+        if r.get("isFork") and not include_forks:
+            continue
+        if r.get("isArchived") and not include_archived:
+            continue
+        targets.append(r)
+
+    rows: list[dict] = []
+    for i, r in enumerate(targets, 1):
+        full = r.get("nameWithOwner") or f"{login}/{r['name']}"
+        if progress:
+            print(f"  hygiene [{i}/{len(targets)}] {full}", flush=True)
+        rows.append(audit_one_repo_hygiene(full, archived=bool(r.get("isArchived"))))
+    rows.sort(key=lambda x: (x.get("_prio", 50), -(x.get("failed_runs_30d") or 0), -(x.get("orphan_secret_count") or 0)))
+    return rows
+
+
 def run_audit(
     keep: set[str] | None = None,
     *,
     skip_fork_enrich: bool = False,
     skip_stars: bool = False,
+    skip_hygiene: bool = False,
+    hygiene_include_archived: bool = False,
     progress: bool = True,
 ) -> dict[str, Any]:
     """Full detection pipeline. Returns serializable audit dict."""
@@ -471,6 +711,17 @@ def run_audit(
         star_rows = [build_star_row(s) for s in stars]
         star_rows.sort(key=lambda x: (x["_prio"], -(x["pdays"] or 0)))
 
+    hygiene_rows: list[dict] = []
+    if not skip_hygiene:
+        if progress:
+            print("auditing workflows & secrets (own repos)...", flush=True)
+        hygiene_rows = audit_hygiene(
+            login,
+            repos,
+            include_archived=hygiene_include_archived,
+            progress=progress,
+        )
+
     summary = {
         "login": login,
         "generated_at": datetime.now().isoformat(timespec="seconds"),
@@ -479,8 +730,10 @@ def run_audit(
         "own_total": sum(1 for r in repo_rows if r["type"] == "自有"),
         "fork_total": sum(1 for r in repo_rows if r["type"] == "Fork"),
         "star_total": len(star_rows),
+        "hygiene_total": len(hygiene_rows),
         "repo_by_cat": dict(Counter(r["cat"] for r in repo_rows)),
         "star_by_cat": dict(Counter(r["cat"] for r in star_rows)),
+        "hygiene_by_cat": dict(Counter(r["cat"] for r in hygiene_rows)),
         "forks_suggest_delete": [
             {"name": r["name"], "full": r["full"], "parent": r["parent"], "cat": r["cat"]}
             for r in repo_rows
@@ -496,12 +749,23 @@ def run_audit(
             for r in star_rows
             if r["cat"] in UNSTAR_CATEGORIES
         ],
+        "hygiene_attention": [
+            {
+                "full": r["full"],
+                "cat": r["cat"],
+                "failed_runs": r.get("failed_runs_30d"),
+                "orphan_secrets": r.get("orphan_secrets"),
+            }
+            for r in hygiene_rows
+            if r["cat"] not in ("正常", "已归档-跳过")
+        ],
     }
 
     return {
         "summary": summary,
         "repos": repo_rows,
         "stars": star_rows,
+        "hygiene": hygiene_rows,
     }
 
 

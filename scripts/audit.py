@@ -5,7 +5,7 @@
 Usage:
   python audit.py
   python audit.py --keep a,b --out audit.json
-  python audit.py --skip-stars --repos-only
+  python audit.py --skip-hygiene
 """
 from __future__ import annotations
 
@@ -15,7 +15,6 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-# allow `python scripts/audit.py` from any cwd
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from common import (  # noqa: E402
@@ -26,12 +25,14 @@ from common import (  # noqa: E402
 
 
 def main() -> int:
-    p = argparse.ArgumentParser(description="Audit GitHub repos + stars (detection only)")
+    p = argparse.ArgumentParser(description="Audit GitHub repos + stars + workflow/secrets")
     p.add_argument("--keep", default="", help="Comma-separated fork names to keep")
     p.add_argument("--out", default="", help="Write full audit JSON path")
     p.add_argument("--summary-only", action="store_true", help="Print summary JSON only")
     p.add_argument("--skip-fork-enrich", action="store_true")
     p.add_argument("--skip-stars", action="store_true")
+    p.add_argument("--skip-hygiene", action="store_true", help="Skip workflow/secrets audit")
+    p.add_argument("--hygiene-include-archived", action="store_true")
     p.add_argument("--quiet", action="store_true")
     args = p.parse_args()
 
@@ -40,6 +41,8 @@ def main() -> int:
         keep,
         skip_fork_enrich=args.skip_fork_enrich,
         skip_stars=args.skip_stars,
+        skip_hygiene=args.skip_hygiene,
+        hygiene_include_archived=args.hygiene_include_archived,
         progress=not args.quiet,
     )
 
