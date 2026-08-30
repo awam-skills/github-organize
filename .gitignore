@@ -35,6 +35,7 @@ htmlcov/
 Thumbs.db
 Desktop.ini
 
-# 本地运行产物
+# 本地运行产物（不入代码归档）
+output/
 *.xlsx
 audit.json

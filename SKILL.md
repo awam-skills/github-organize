@@ -40,6 +40,8 @@ gh auth status
 
 `SKILL_DIR` = 技能根目录，例如 `$HOME/.agents/skills/github-organize`
 
+默认产物目录：`$SKILL_DIR/output/`（`audit.py` / `export_report.py` 未指定 `--out` 时写入此处；`output/` 已 gitignore，不入代码归档）。
+
 ## 进度清单
 
 ```

@@ -30,7 +30,7 @@ from common import (  # noqa: E402
     UNSTAR_CATEGORIES,
     archive_repo,
     auth_scopes,
-    default_desktop,
+    default_output_dir,
     delete_repo,
     ensure_starred,
     unstar_repo,
@@ -595,7 +595,7 @@ def main() -> int:
         stamp = datetime.now().strftime("%Y%m%d_%H%M")
         out = src.with_name(f"{src.stem}_处理结果_{stamp}.xlsx")
         if not out.parent.is_dir():
-            out = default_desktop() / out.name
+            out = default_output_dir() / out.name
 
     print(f"processing {src} -> {out} (dry_run={args.dry_run}) ...", flush=True)
     summary = process_workbook(src, out, dry_run=args.dry_run)

@@ -92,11 +92,16 @@ def tmp_dir() -> Path:
     return Path(os.environ.get("TEMP") or os.environ.get("TMP") or "/tmp")
 
 
-def default_desktop() -> Path:
-    for p in (Path.home() / "Desktop", Path.home() / "Documents", Path.home()):
-        if p.is_dir():
-            return p
-    return Path.home()
+def skill_dir() -> Path:
+    """本技能根目录（scripts/ 的上一级）。"""
+    return Path(__file__).resolve().parent.parent
+
+
+def default_output_dir() -> Path:
+    """默认产物目录：技能下的 output/（自动创建）。"""
+    out = skill_dir() / "output"
+    out.mkdir(parents=True, exist_ok=True)
+    return out
 
 
 def get_login() -> str:
@@ -668,11 +673,14 @@ def run_audit(
     *,
     skip_fork_enrich: bool = False,
     skip_stars: bool = False,
-    skip_hygiene: bool = False,
+    skip_hygiene: bool = True,
     hygiene_include_archived: bool = False,
     progress: bool = True,
 ) -> dict[str, Any]:
-    """Full detection pipeline. Returns serializable audit dict."""
+    """Full detection pipeline. Returns serializable audit dict.
+
+    默认跳过 workflow/secrets（hygiene）；需显式 skip_hygiene=False 才启用。
+    """
     keep = keep or set()
     login = get_login()
     if progress:
@@ -731,6 +739,8 @@ def run_audit(
         "fork_total": sum(1 for r in repo_rows if r["type"] == "Fork"),
         "star_total": len(star_rows),
         "hygiene_total": len(hygiene_rows),
+        "hygiene_skipped": skip_hygiene,
+        "stars_skipped": skip_stars,
         "repo_by_cat": dict(Counter(r["cat"] for r in repo_rows)),
         "star_by_cat": dict(Counter(r["cat"] for r in star_rows)),
         "hygiene_by_cat": dict(Counter(r["cat"] for r in hygiene_rows)),

@@ -19,7 +19,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from common import (  # noqa: E402
-    default_desktop,
+    default_output_dir,
     load_audit,
     run_audit,
     save_audit,
@@ -291,7 +291,16 @@ def main() -> int:
     parser.add_argument("--keep", default="", help="Comma-separated fork names to keep")
     parser.add_argument("--skip-fork-enrich", action="store_true")
     parser.add_argument("--skip-stars", action="store_true")
-    parser.add_argument("--skip-hygiene", action="store_true", help="Skip workflow/secrets audit")
+    parser.add_argument(
+        "--with-hygiene",
+        action="store_true",
+        help="Include workflow/secrets audit (default: off)",
+    )
+    parser.add_argument(
+        "--skip-hygiene",
+        action="store_true",
+        help=argparse.SUPPRESS,  # 兼容旧参数；hygiene 本就默认跳过
+    )
     parser.add_argument("--hygiene-include-archived", action="store_true")
     args = parser.parse_args()
     keep = {x.strip() for x in args.keep.split(",") if x.strip()}
@@ -310,7 +319,7 @@ def main() -> int:
             keep,
             skip_fork_enrich=args.skip_fork_enrich,
             skip_stars=args.skip_stars,
-            skip_hygiene=args.skip_hygiene,
+            skip_hygiene=not args.with_hygiene,
             hygiene_include_archived=args.hygiene_include_archived,
             progress=True,
         )
@@ -323,7 +332,7 @@ def main() -> int:
             print(f"audit json: {args.audit_out}", flush=True)
 
     out = Path(args.out) if args.out else (
-        default_desktop() / f"GitHub整理建议_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
+        default_output_dir() / f"GitHub整理建议_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
     )
     out.parent.mkdir(parents=True, exist_ok=True)
     print(f"writing {out} ...", flush=True)
