@@ -1,6 +1,9 @@
 # 分类规则参考
 
-Agent 按下列规则填写「处理分类」与「建议」。用户指定保留的仓库优先于自动规则。
+**实现位置**：`scripts/common.py` 中的 `classify_repo` / `classify_star` / `enrich_fork` / `run_audit`。  
+Agent **不要**在对话里重新实现这些规则；改规则应改代码。
+
+用户指定保留的仓库（`audit.py --keep`）优先于自动规则。
 
 ## Fork
 

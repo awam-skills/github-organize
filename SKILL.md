@@ -2,14 +2,27 @@
 name: github-organize
 description: >-
   审计并整理个人 GitHub 仓库与星标：找出无新提交的 fork、建议归档的自有仓、
-  可取消/归类的星标，并导出含「仓库」「星标项目」工作表的 Excel。在用户提到
-  GitHub 整理、清理 fork、整理星标、归档仓库、导出 GitHub Excel、github-organize
-  时使用。
+  可取消/归类的星标，并导出含「仓库」「星标项目」工作表的 Excel。检测逻辑优先跑
+  scripts/audit.py（勿手写重复 gh 流程）。在用户提到 GitHub 整理、清理 fork、
+  整理星标、归档仓库、导出 GitHub Excel、github-organize 时使用。
 ---
 
 # GitHub 整理（仓库 + 星标）
 
-基于 `gh` CLI 审计当前登录账号的 **Fork / 自有仓库 / 星标**，给出处理分类与建议，并可导出 Excel。
+**检测与分类一律用本技能脚本实现**；Agent 负责解读结果、向用户确认、再调用 `apply.py` 执行。
+
+## 脚本一览
+
+路径相对本技能目录 `scripts/`：
+
+| 脚本 | 作用 |
+|------|------|
+| [`common.py`](scripts/common.py) | 拉取 / 比对 / 分类（被其它脚本 import） |
+| [`audit.py`](scripts/audit.py) | **检测入口**：输出审计 JSON + 摘要 |
+| [`export_report.py`](scripts/export_report.py) | 检测或读 JSON → Excel（汇总说明 / 仓库 / 星标项目） |
+| [`apply.py`](scripts/apply.py) | 确认后：星标上游、删 fork、归档自有仓、取消星标 |
+
+分类细则见 [reference.md](reference.md)。
 
 ## 前置条件
 
@@ -17,115 +30,91 @@ description: >-
 gh auth status
 ```
 
-- 需要已登录；删除仓库还需 `delete_repo` scope：
-  `gh auth refresh -h github.com -s delete_repo`（用户需在浏览器完成授权）
-- Excel 导出依赖 Python 包 `openpyxl`（脚本会尝试自动安装）
+- 删除仓库需要 `delete_repo`：`gh auth refresh -h github.com -s delete_repo`
+- Excel 需要 `openpyxl`（`export_report.py` 会尝试自动安装）
+
+将 `SKILL_DIR` 设为技能根目录（含 `scripts/` 的那一层），例如：
+
+`$HOME/.agents/skills/github-organize`
 
 ## 进度清单
 
 ```
 GitHub 整理进度:
-- [ ] 1. 确认 gh 登录账号
-- [ ] 2. 审计 Fork（ahead / 本人提交）
-- [ ] 3. 审计自有仓库（活跃度 / 归档建议）
-- [ ] 4. 审计星标（归档上游 / 过期 / Lists 建议）
-- [ ] 5. 向用户汇报摘要与可选操作
-- [ ] 6. （可选）导出 Excel
-- [ ] 7. （可选）执行删除 fork / 星标上游 / 归档——仅在用户明确确认后
+- [ ] 1. gh auth status
+- [ ] 2. 运行 audit.py（或 export_report.py 顺带审计）
+- [ ] 3. 根据 summary 向用户汇报
+- [ ] 4. （可选）export_report.py 导出 Excel
+- [ ] 5. （可选）用户确认后 apply.py --dry-run → --yes
 ```
+
+## 强制规则：检测走代码
+
+1. **禁止**用临时 shell/Node 重写 fork 比对、星标分页、分类规则。
+2. **必须**调用 `audit.py` 或 `export_report.py`（二者内部共用 `common.run_audit`）。
+3. 向用户展示时，优先引用 JSON 里的 `summary.forks_suggest_delete` / `own_suggest_archive` / `stars_suggest_unstar`。
+4. 破坏性操作**只能**经 `apply.py`，且先 `--dry-run`，用户确认后再 `--yes`。
 
 ## 工作流
 
-### 1. 确认身份
+### 1. 审计（检测）
 
 ```bash
-gh api user --jq "{login, public_repos}"
+python "$SKILL_DIR/scripts/audit.py" --keep "fork1,fork2"
+# 默认把完整 JSON 写到桌面 GitHub审计_*.json，stdout 打印摘要
 ```
 
-后续所有操作针对该登录用户。
+常用参数：
 
-### 2. 审计 Fork（核心）
+- `--keep a,b` — 标记为「保留-你指定保留」
+- `--out path.json` — 指定审计 JSON 路径
+- `--skip-stars` — 只审计仓库（更快）
+- `--skip-fork-enrich` — 跳过 fork 比对（不准确，仅调试）
 
-对每个 `isFork: true` 的仓库：
+### 2. 汇报
 
-1. 取 `parent` 与默认分支（GraphQL 或 `gh api repos/{owner}/{repo}`）
-2. 比较 `parentOwner:parentBranch...forkOwner:forkBranch`（URL 编码 `:` 为 `%3A`）
-3. 查默认分支是否有本人提交：`gh api repos/{owner}/{repo}/commits?author={login}&per_page=1`
+读取 stdout / JSON 的 `summary`：
 
-**无新提交判定（建议删除候选）：**
+- `forks_suggest_delete` — 建议删的 fork（含 parent）
+- `own_suggest_archive` — 建议归档的自有仓
+- `stars_suggest_unstar` — 建议取消星标
+- `repo_by_cat` / `star_by_cat` — 分类计数
 
-- `ahead_by == 0` 且本人提交数为 0；或
-- 比对失败（404 / 无共同祖先）且本人提交数为 0
-
-详细分类见 [reference.md](reference.md)。
-
-### 3. 审计自有仓库
+### 3. 导出 Excel（可选）
 
 ```bash
-gh repo list {login} --limit 500 --json name,isFork,isPrivate,isArchived,primaryLanguage,pushedAt,stargazerCount,description,url
+# 现场审计并导出
+python "$SKILL_DIR/scripts/export_report.py" --keep "a,b" --audit-out audit.json
+
+# 或基于已有审计 JSON
+python "$SKILL_DIR/scripts/export_report.py" --from audit.json --out report.xlsx
 ```
 
-按最后推送时间：
-
-| 距今 | 分类倾向 |
-|------|----------|
-| ≤180 天 | 活跃维护 |
-| 180–365 天 | 半活跃 |
-| >365 天且未归档 | 建议归档 |
-| 已归档 | 已归档 |
-
-无 description 的活跃仓：建议补描述 / topics。
-
-### 4. 审计星标
-
-用 GraphQL `viewer.starredRepositories` 分页拉取（含 `starredAt`、language、topics、`isArchived`、`pushedAt`）。
-
-| 条件 | 分类倾向 |
-|------|----------|
-| 上游 `isArchived` | 建议取消星标 |
-| 推送 >3 年 | 建议评估取消 |
-| 推送 2–3 年 | 可保留，标「已过时」 |
-| 近 90 天星标或上游仍活跃 | 保留并归入 Lists |
-
-Lists 建议标签：`AI/LLM`、`量化/股票`、`前端`、`Node/后端`、`工具/DevOps`、`Android/自动化`、`机器学习`、`待读/未分类`。
-
-### 5. 汇报与确认
-
-先给**摘要数字**与**可执行下一步**（删 fork / 归档 / 导出 Excel / 建 Lists），**不要**在未确认时删除或归档。
-
-删除 fork 时推荐顺序：
-
-1. 对上游 `PUT user/starred/{owner}/{repo}`（已星标则跳过）
-2. `gh repo delete {login}/{name} --yes`（需 `delete_repo`）
-3. 汇总成功 / 失败
-
-### 6. 导出 Excel
-
-默认输出到用户桌面。执行：
+### 4. 执行（仅用户确认后）
 
 ```bash
-python scripts/export_report.py
-# 可选
-python scripts/export_report.py --out "D:/path/GitHub整理建议.xlsx"
-python scripts/export_report.py --keep fork1,fork2
+# 预览
+python "$SKILL_DIR/scripts/apply.py" --from audit.json --delete-forks --star-parents --dry-run
+
+# 执行：先星标上游再删「建议删除-无新提交」类 fork
+python "$SKILL_DIR/scripts/apply.py" --from audit.json --delete-forks --star-parents --yes \
+  --categories "建议删除-无新提交" --exclude "kept1,kept2"
+
+# 归档自有仓 / 取消星标 同理
+python "$SKILL_DIR/scripts/apply.py" --from audit.json --archive-own --dry-run
+python "$SKILL_DIR/scripts/apply.py" --from audit.json --unstar --dry-run \
+  --categories "建议取消星标-上游已归档"
 ```
 
-生成工作簿：
-
-1. **汇总说明** — 分类统计与使用说明  
-2. **仓库** — 自有 + Fork，含处理分类与建议  
-3. **星标项目** — 全部星标，含 Lists 建议与建议操作  
-
-脚本路径相对本技能目录：[`scripts/export_report.py`](scripts/export_report.py)。
+缺 `delete_repo` 时 `apply.py` 会返回错误并提示 `gh auth refresh`；等用户完成浏览器授权后再重试。
 
 ## 安全规则
 
-- **删除 / 归档 / 批量 unstar**：必须用户明确点名或确认列表后再执行
-- 用户说「除了 X 其他都删」时，严格按排除项保留
-- 不要修改 `gh` 的 git config；不要 force 操作无关仓库
-- 403 缺 `delete_repo` 时引导 `gh auth refresh`，等待用户完成浏览器授权后再重试
+- 删除 / 归档 / 批量 unstar：必须用户明确确认列表
+- 「除了 X 其他都删」→ `--exclude` 或 `--keep`（审计阶段）严格保留
+- 不要改 git config；不要对无关仓库 force 操作
 
-## 与其它技能关系
+## 与其它技能
 
-- 通用 `gh` issue/PR/CI：可用已有 `github` 技能
-- 本技能专注：**个人仓库卫生 + 星标整理 + Excel 报告**
+- 通用 issue/PR/CI：用 `github` 技能
+- 本技能：个人仓卫生 + 星标整理 + Excel，**检测逻辑在 scripts/**
