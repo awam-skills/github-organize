@@ -72,17 +72,27 @@ GET /repos/{owner}/{repo}/commits?author={login}&per_page=1
 
 ### 仓库
 
-仓库名、完整名、类型、可见性、是否归档、主语言、Stars、描述、创建时间、最后推送、距今推送天数、上游仓库、ahead、behind、本人提交、处理分类、建议、URL
+仓库名、完整名、类型、可见性、是否归档、主语言、Stars、描述、创建时间、最后推送、距今推送天数、上游仓库、ahead、behind、本人提交、处理分类、建议、URL、**人工处理**、**处理结果**、**进一步建议**
 
 ### 星标项目
 
-仓库、Owner、主语言、Topics、描述、上游 Stars、是否归档、是否 Fork、最后推送、距今推送天数、星标时间、距今星标天数、处理分类、建议归入 List、建议、URL
+仓库、Owner、主语言、Topics、描述、上游 Stars、是否归档、是否 Fork、最后推送、距今推送天数、星标时间、距今星标天数、处理分类、建议归入 List、建议、URL、**人工处理**、**处理结果**、**进一步建议**
 
 ### 工作流与密钥（自有仓）
 
-仓库、是否归档、有 Workflow、Workflow 数、近期失败运行数、失败工作流名、Secrets 数、孤儿 Secrets 数、孤儿列表、CodeQL 状态、处理分类、建议、备注/错误、URL
+仓库、是否归档、有 Workflow、Workflow 数、近期失败运行数、失败工作流名、Secrets 数、孤儿 Secrets 数、孤儿列表、CodeQL 状态、处理分类、建议、备注/错误、URL、**人工处理**、**处理结果**、**进一步建议**
 
-实现：`scripts/common.py` → `audit_one_repo_hygiene` / `audit_hygiene`。
+### 人工处理列
+
+| 取值 | 含义 |
+|------|------|
+| 不处理 | **默认**；`process_excel.py` 跳过该行 |
+| 按照建议 | 按「处理分类」映射可自动动作（删 fork / 归档 / unstar 等） |
+| 其它任意文字 | 「其他处理方式」；脚本归类意图，能自动则执行，否则写入「进一步建议」供 Agent 分析 |
+
+导出时「处理结果」「进一步建议」为空；执行 `process_excel.py` 后回写。
+
+实现：`scripts/common.py` → `audit_one_repo_hygiene` / `audit_hygiene`；Excel 处理 → `process_excel.py`。
 
 | 条件 | 处理分类 |
 |------|----------|
