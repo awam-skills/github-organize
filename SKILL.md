@@ -1,5 +1,6 @@
 ---
 name: github-organize
+version: 0.0.1
 description: "审计并整理个人 GitHub 仓库与星标：无新提交 fork、建议归档自有仓、可取消/归类星标；可选 Actions/Secrets 审计（默认关）；导出含人工处理列的 Excel，并可按表自动执行或 AI 归类回写。检测优先 scripts/audit.py。在用户提到 GitHub 整理、清理 fork、整理星标、归档仓库、workflow/secrets 审计、导出 GitHub Excel、按 Excel 处理、github-organize 时使用。通用 issue/PR/CI 用 github 技能。"
 ---
 
